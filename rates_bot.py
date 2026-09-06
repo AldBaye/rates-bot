@@ -25,12 +25,14 @@ def get_rates():
     if usd_kzt is None:
         raise RuntimeError("Не удалось найти курс USD в ответе Нацбанка РК")
 
-    # Курс BTC/KZT — CoinGecko, без ключа
+        # CoinGecko не поддерживает тенге напрямую, поэтому берём BTC в долларах
+    # и переводим в тенге через курс USD/KZT, который уже получили выше
     btc = requests.get(
-        "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=kzt",
+        "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
         timeout=15,
     ).json()
-    btc_kzt = btc["bitcoin"]["kzt"]
+    btc_usd = btc["bitcoin"]["usd"]
+    btc_kzt = btc_usd * usd_kzt
 
     return usd_kzt, btc_kzt
 
