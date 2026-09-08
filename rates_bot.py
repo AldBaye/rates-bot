@@ -54,11 +54,16 @@ def send_or_edit():
             f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
             data={"chat_id": CHAT_ID, "message_id": message_id, "text": text},
         )
-        result = r.json()
+                result = r.json()
         if not result.get("ok"):
-            # Если сообщение не найдено (удалено вручную и т.п.) — создаём новое
-            print("Не удалось отредактировать, создаю новое сообщение:", result)
-            create_new(text)
+            description = result.get("description", "").lower()
+            if "message is not modified" in description:
+                # Курс не изменился с прошлого раза — это нормально, ничего не делаем
+                print("Курс не изменился, редактирование не требуется")
+            else:
+                # Сообщение реально потеряно (удалено и т.п.) — создаём новое
+                print("Не удалось отредактировать, создаю новое сообщение:", result)
+                create_new(text)
         else:
             print("Сообщение обновлено")
     else:
