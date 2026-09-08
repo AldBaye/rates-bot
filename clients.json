@@ -2,8 +2,11 @@
   {
     "name": "Raven Media",
     "chat_id": "@ravenmedia_tg",
-    "currencies": ["USD_KZT", "BTC_USD"],
-    "message_id": null,
+    "currencies": [
+      "USD_KZT",
+      "BTC_USD"
+    ],
+    "message_id": 22,
     "active": true
   }
 ]
