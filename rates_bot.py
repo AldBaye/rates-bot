@@ -54,7 +54,7 @@ def send_or_edit():
             f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
             data={"chat_id": CHAT_ID, "message_id": message_id, "text": text},
         )
-                result = r.json()
+        result = r.json()
         if not result.get("ok"):
             description = result.get("description", "").lower()
             if "message is not modified" in description:
@@ -94,4 +94,3 @@ def create_new(text):
 
 if __name__ == "__main__":
     send_or_edit()
- 
