@@ -23,11 +23,10 @@ jobs:
       - run: python rates_bot.py
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
 
-      - name: Сохранить message_id.json обратно в репозиторий
+      - name: Сохранить clients.json обратно в репозиторий
         run: |
           git config user.email "actions@github.com"
           git config user.name "rates-bot"
-          git add message_id.json
+          git add clients.json
           git diff --staged --quiet || (git commit -m "update state" && git push)
