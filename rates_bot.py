@@ -1,3 +1,4 @@
+import time
 import requests
 import json
 import os
@@ -22,9 +23,28 @@ CURRENCY_SPECS = {
 }
 
 
+def _get_with_retry(url, attempts=3, backoff=3, timeout=15, **kwargs):
+    """
+    GET с повторными попытками. Внешние источники курсов иногда
+    подтормаживают/обрываются — вместо падения с первой же неудачи
+    пробуем ещё пару раз с паузой, и только потом сдаёмся.
+    """
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            r = requests.get(url, timeout=timeout, **kwargs)
+            r.raise_for_status()
+            return r
+        except requests.RequestException as e:
+            last_error = e
+            if attempt < attempts:
+                time.sleep(backoff * attempt)
+    raise last_error
+
+
 def fetch_nacbank():
     """Курсы Нацбанка РК к тенге. Возвращает {код: курс за 1 единицу}."""
-    r = requests.get("https://nationalbank.kz/rss/rates_all.xml", timeout=15)
+    r = _get_with_retry("https://nationalbank.kz/rss/rates_all.xml")
     root = ET.fromstring(r.content)
 
     rates = {}
@@ -42,9 +62,8 @@ def fetch_coingecko(ids):
     if not ids:
         return {}
     joined = ",".join(sorted(ids))
-    r = requests.get(
+    r = _get_with_retry(
         f"https://api.coingecko.com/api/v3/simple/price?ids={joined}&vs_currencies=usd",
-        timeout=15,
     )
     data = r.json()
     return {coin_id: data[coin_id]["usd"] for coin_id in ids if coin_id in data}
@@ -52,7 +71,7 @@ def fetch_coingecko(ids):
 
 def fetch_cbr():
     """Курсы ЦБ РФ к рублю. Возвращает {код: курс за 1 единицу}."""
-    r = requests.get("https://www.cbr-xml-daily.ru/daily_json.js", timeout=15)
+    r = _get_with_retry("https://www.cbr-xml-daily.ru/daily_json.js")
     data = r.json()
     rates = {}
     for code, info in data["Valute"].items():
@@ -60,36 +79,54 @@ def fetch_cbr():
     return rates
 
 
+SOURCE_FETCHERS = {
+    "nacbank": lambda needed_ids: fetch_nacbank(),
+    "cbr": lambda needed_ids: fetch_cbr(),
+    "coingecko": fetch_coingecko,
+}
+
+
 def fetch_all_rates(needed_currency_codes):
     """
     Смотрит, какие источники реально нужны (по всем клиентам разом),
     и запрашивает каждый источник только один раз — а не по разу на клиента.
+
+    Если какой-то источник не ответил (после ретраев) — не роняет весь
+    прогон, а просто помечает его как недоступный. Клиентам, которым
+    нужны курсы только из рабочих источников, это не мешает.
     """
     needed_sources = {CURRENCY_SPECS[c]["source"] for c in needed_currency_codes}
     raw = {}
+    failed_sources = {}
 
-    if "nacbank" in needed_sources:
-        raw["nacbank"] = fetch_nacbank()
-
-    if "coingecko" in needed_sources:
-        ids = {
-            CURRENCY_SPECS[c]["id"]
-            for c in needed_currency_codes
-            if CURRENCY_SPECS[c]["source"] == "coingecko"
-        }
-        raw["coingecko"] = fetch_coingecko(ids)
-
-    if "cbr" in needed_sources:
-        raw["cbr"] = fetch_cbr()
+    for source in needed_sources:
+        try:
+            if source == "coingecko":
+                ids = {
+                    CURRENCY_SPECS[c]["id"]
+                    for c in needed_currency_codes
+                    if CURRENCY_SPECS[c]["source"] == "coingecko"
+                }
+                raw[source] = SOURCE_FETCHERS[source](ids)
+            else:
+                raw[source] = SOURCE_FETCHERS[source](None)
+        except Exception as e:
+            print(f"[источник {source}] не удалось получить курсы: {e}")
+            failed_sources[source] = str(e)
 
     values = {}
     for currency_code in needed_currency_codes:
         spec = CURRENCY_SPECS[currency_code]
         source = spec["source"]
-        if source == "coingecko":
-            values[currency_code] = raw["coingecko"][spec["id"]]
-        else:
-            values[currency_code] = raw[source][spec["code"]]
+        if source in failed_sources:
+            continue  # этой валюты в этом прогоне не будет — источник недоступен
+        try:
+            if source == "coingecko":
+                values[currency_code] = raw["coingecko"][spec["id"]]
+            else:
+                values[currency_code] = raw[source][spec["code"]]
+        except KeyError as e:
+            print(f"[{currency_code}] нет данных в ответе источника {source}: {e}")
 
     return values
 
@@ -97,6 +134,8 @@ def fetch_all_rates(needed_currency_codes):
 def build_text(client, values):
     lines = []
     for currency_code in client["currencies"]:
+        if currency_code not in values:
+            continue  # источник для этой валюты сейчас недоступен — пропускаем строку
         spec = CURRENCY_SPECS[currency_code]
         label = currency_code.split("_")[0]
         value = values[currency_code]
@@ -157,6 +196,9 @@ def main():
     for client in active_clients:
         try:
             text = build_text(client, values)
+            if not text:
+                print(f"[{client.get('name', '???')}] пропущен: ни один источник курсов не ответил")
+                continue
             new_message_id = send_or_edit(client, text)
             if new_message_id != client.get("message_id"):
                 client["message_id"] = new_message_id
